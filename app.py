@@ -3,7 +3,7 @@
 竹溪社问答助手 · 网页版（Streamlit）
 本地预览：  streamlit run app.py
 部署后玩家打开链接即可提问。
-API key 从环境变量 / Streamlit Secrets 读取（不要写死在代码里、不要提交到 GitHub）。
+
 """
 
 import os
