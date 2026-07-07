@@ -35,21 +35,23 @@ def get_api_key():
 @st.cache_resource(show_spinner="正在准备知识库…")
 def build_chain(api_key):
     docs = TextLoader("knowledge.txt", encoding="utf-8").load()
+    # chunk 放大 + overlap 加大：让每段更完整（尤其问答对不被拆散）
     chunks = RecursiveCharacterTextSplitter(
-        chunk_size=300, chunk_overlap=50
+        chunk_size=500, chunk_overlap=100
     ).split_documents(docs)
     embeddings = OpenAIEmbeddings(model=EMBED_MODEL, api_key=api_key, base_url=BASE_URL)
     store = FAISS.from_documents(chunks, embeddings)
-    retriever = store.as_retriever(search_kwargs={"k": 3})
-    # max_tokens 限制单次回答长度，控制每次调用的成本（防烧穿的第一道）
+    retriever = store.as_retriever(search_kwargs={"k": 5})  # 多检索几段，回答更全
+    # max_tokens 控制成本；temperature=0 保证准确不乱编
     llm = ChatOpenAI(model=CHAT_MODEL, api_key=api_key, base_url=BASE_URL,
-                     temperature=0, max_tokens=400)
+                     temperature=0, max_tokens=500)
     prompt = ChatPromptTemplate.from_template(
-        "你是竹溪社的问答助手，只回答与竹溪社相关的问题。"
-        "请只根据下面的【资料】回答；如果资料里没有相关内容，就直说"
-        "“这个我暂时没有资料，可以问一下社团工作人员～”，绝不编造。"
-        "如果用户问的是与竹溪社无关的问题（如闲聊、写代码、常识问答等），"
-        "请礼貌拒绝，并引导他询问竹溪社相关的内容。\n\n"
+        "你是竹溪社的官方问答小助手。请用亲切、热情、口语化的语气回答，"
+        "像社团里热心的学长学姐，让人感到温暖友好；可以适当用“～”和一个小 emoji，但别太多。"
+        "回答要具体、有条理，把【资料】里相关的信息尽量讲清楚，不要敷衍或只说一句话。\n"
+        "请只根据下面的【资料】回答；如果资料里确实没有，就友好地说"
+        "“这个我暂时没有资料，可以直接问社团工作人员哦～”，绝不编造。"
+        "与竹溪社无关的问题（闲聊、写代码、常识等）请礼貌婉拒并引导回社团话题。\n\n"
         "【资料】\n{context}\n\n【问题】{question}\n\n【回答】"
     )
     def fmt(ds):
@@ -90,18 +92,18 @@ if "messages" not in st.session_state:
 if "count" not in st.session_state:
     st.session_state.count = 0
 
+# 推荐问题：始终显示在顶部，方便随时点其他问题
+st.markdown("💡 **不知道问什么？点这些试试：**")
+cols = st.columns(2)
+for i, s in enumerate(SUGGESTIONS):
+    if cols[i % 2].button(s, key=f"sug_{i}", use_container_width=True):
+        st.session_state.pending = s
+        st.rerun()
+st.divider()
+
 # 展示历史消息
 for m in st.session_state.messages:
     st.chat_message(m["role"]).write(m["content"])
-
-# 对话刚开始时，显示推荐问题按钮
-if not st.session_state.messages:
-    st.markdown("💡 **不知道问什么？点下面试试：**")
-    cols = st.columns(2)
-    for i, s in enumerate(SUGGESTIONS):
-        if cols[i % 2].button(s, key=f"sug_{i}", use_container_width=True):
-            st.session_state.pending = s
-            st.rerun()
 
 # 问题来源：点击的推荐问题 或 手动输入
 typed = st.chat_input("输入你的问题…")
