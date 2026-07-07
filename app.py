@@ -41,10 +41,15 @@ def build_chain(api_key):
     embeddings = OpenAIEmbeddings(model=EMBED_MODEL, api_key=api_key, base_url=BASE_URL)
     store = FAISS.from_documents(chunks, embeddings)
     retriever = store.as_retriever(search_kwargs={"k": 3})
-    llm = ChatOpenAI(model=CHAT_MODEL, api_key=api_key, base_url=BASE_URL, temperature=0)
+    # max_tokens 限制单次回答长度，控制每次调用的成本（防烧穿的第一道）
+    llm = ChatOpenAI(model=CHAT_MODEL, api_key=api_key, base_url=BASE_URL,
+                     temperature=0, max_tokens=400)
     prompt = ChatPromptTemplate.from_template(
-        "你是竹溪社的问答助手。只根据下面的【资料】回答用户问题；"
-        "如果资料里没有相关内容，就直说“资料里没有提到”，不要编造。\n\n"
+        "你是竹溪社的问答助手，只回答与竹溪社相关的问题。"
+        "请只根据下面的【资料】回答；如果资料里没有相关内容，就直说"
+        "“这个我暂时没有资料，可以问一下社团工作人员～”，绝不编造。"
+        "如果用户问的是与竹溪社无关的问题（如闲聊、写代码、常识问答等），"
+        "请礼貌拒绝，并引导他询问竹溪社相关的内容。\n\n"
         "【资料】\n{context}\n\n【问题】{question}\n\n【回答】"
     )
     def fmt(ds):
@@ -66,17 +71,30 @@ if not api_key:
 
 chain = build_chain(api_key)
 
+# —— 简单防滥用：单次会话提问上限 + 单条长度限制（防烧穿）——
+MAX_Q_PER_SESSION = 20   # 每次会话最多问 20 次，超过需刷新
+MAX_Q_LEN = 200          # 单个问题最多 200 字
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "count" not in st.session_state:
+    st.session_state.count = 0
+
 for m in st.session_state.messages:
     st.chat_message(m["role"]).write(m["content"])
 
 q = st.chat_input("输入你的问题…")
 if q:
-    st.chat_message("user").write(q)
-    st.session_state.messages.append({"role": "user", "content": q})
-    with st.chat_message("assistant"):
-        with st.spinner("思考中…"):
-            ans = chain.invoke(q)
-            st.write(ans)
-    st.session_state.messages.append({"role": "assistant", "content": ans})
+    if st.session_state.count >= MAX_Q_PER_SESSION:
+        st.warning("本次对话的提问次数已达上限，刷新页面即可继续～")
+    elif len(q) > MAX_Q_LEN:
+        st.warning(f"问题有点长，请精简到 {MAX_Q_LEN} 字以内～")
+    else:
+        st.session_state.count += 1
+        st.chat_message("user").write(q)
+        st.session_state.messages.append({"role": "user", "content": q})
+        with st.chat_message("assistant"):
+            with st.spinner("思考中…"):
+                ans = chain.invoke(q)
+                st.write(ans)
+        st.session_state.messages.append({"role": "assistant", "content": ans})
