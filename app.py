@@ -1,0 +1,82 @@
+# -*- coding: utf-8 -*-
+"""
+竹溪社问答助手 · 网页版（Streamlit）
+本地预览：  streamlit run app.py
+部署后玩家打开链接即可提问。
+API key 从环境变量 / Streamlit Secrets 读取（不要写死在代码里、不要提交到 GitHub）。
+"""
+
+import os
+import streamlit as st
+from langchain_community.document_loaders import TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.vectorstores import FAISS
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+
+# ===== 服务商配置（智谱 GLM）=====
+BASE_URL = "https://open.bigmodel.cn/api/paas/v4"   # OpenAI 用户改成 None
+CHAT_MODEL = "glm-4-flash"
+EMBED_MODEL = "embedding-3"
+
+
+def get_api_key():
+    k = os.environ.get("LLM_API_KEY", "")
+    if k:
+        return k
+    try:
+        return st.secrets.get("LLM_API_KEY", "")
+    except Exception:
+        return ""
+
+
+@st.cache_resource(show_spinner="正在准备知识库…")
+def build_chain(api_key):
+    docs = TextLoader("knowledge.txt", encoding="utf-8").load()
+    chunks = RecursiveCharacterTextSplitter(
+        chunk_size=300, chunk_overlap=50
+    ).split_documents(docs)
+    embeddings = OpenAIEmbeddings(model=EMBED_MODEL, api_key=api_key, base_url=BASE_URL)
+    store = FAISS.from_documents(chunks, embeddings)
+    retriever = store.as_retriever(search_kwargs={"k": 3})
+    llm = ChatOpenAI(model=CHAT_MODEL, api_key=api_key, base_url=BASE_URL, temperature=0)
+    prompt = ChatPromptTemplate.from_template(
+        "你是竹溪社的问答助手。只根据下面的【资料】回答用户问题；"
+        "如果资料里没有相关内容，就直说“资料里没有提到”，不要编造。\n\n"
+        "【资料】\n{context}\n\n【问题】{question}\n\n【回答】"
+    )
+    def fmt(ds):
+        return "\n\n".join(d.page_content for d in ds)
+    return (
+        {"context": retriever | fmt, "question": RunnablePassthrough()}
+        | prompt | llm | StrOutputParser()
+    )
+
+
+st.set_page_config(page_title="竹溪社问答助手", page_icon="🎋")
+st.title("🎋 竹溪社问答助手")
+st.caption("关于竹溪社的任何问题都可以问我～（怎么加入 / 有哪些活动 / 一个人来会不会尴尬…）")
+
+api_key = get_api_key()
+if not api_key:
+    st.error("未配置 API key。请在部署平台的 Secrets（或本地环境变量 LLM_API_KEY）里设置。")
+    st.stop()
+
+chain = build_chain(api_key)
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+for m in st.session_state.messages:
+    st.chat_message(m["role"]).write(m["content"])
+
+q = st.chat_input("输入你的问题…")
+if q:
+    st.chat_message("user").write(q)
+    st.session_state.messages.append({"role": "user", "content": q})
+    with st.chat_message("assistant"):
+        with st.spinner("思考中…"):
+            ans = chain.invoke(q)
+            st.write(ans)
+    st.session_state.messages.append({"role": "assistant", "content": ans})
