@@ -3,7 +3,7 @@
 竹溪社问答助手 · 网页版（Streamlit）
 本地预览：  streamlit run app.py
 部署后玩家打开链接即可提问。
-
+API key 从环境变量 / Streamlit Secrets 读取（不要写死在代码里、不要提交到 GitHub）。
 """
 
 import os
@@ -75,15 +75,38 @@ chain = build_chain(api_key)
 MAX_Q_PER_SESSION = 20   # 每次会话最多问 20 次，超过需刷新
 MAX_Q_LEN = 200          # 单个问题最多 200 字
 
+# 推荐问题：帮不熟悉社团的玩家快速上手（在这里增减即可）
+SUGGESTIONS = [
+    "怎么加入竹溪社？",
+    "剧本社交是什么？",
+    "有哪些活动？",
+    "一个人来会不会尴尬？",
+    "参加需要花钱吗？",
+    "不是留学生可以参加吗？",
+]
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "count" not in st.session_state:
     st.session_state.count = 0
 
+# 展示历史消息
 for m in st.session_state.messages:
     st.chat_message(m["role"]).write(m["content"])
 
-q = st.chat_input("输入你的问题…")
+# 对话刚开始时，显示推荐问题按钮
+if not st.session_state.messages:
+    st.markdown("💡 **不知道问什么？点下面试试：**")
+    cols = st.columns(2)
+    for i, s in enumerate(SUGGESTIONS):
+        if cols[i % 2].button(s, key=f"sug_{i}", use_container_width=True):
+            st.session_state.pending = s
+            st.rerun()
+
+# 问题来源：点击的推荐问题 或 手动输入
+typed = st.chat_input("输入你的问题…")
+q = st.session_state.pop("pending", None) or typed
+
 if q:
     if st.session_state.count >= MAX_Q_PER_SESSION:
         st.warning("本次对话的提问次数已达上限，刷新页面即可继续～")
@@ -91,10 +114,8 @@ if q:
         st.warning(f"问题有点长，请精简到 {MAX_Q_LEN} 字以内～")
     else:
         st.session_state.count += 1
-        st.chat_message("user").write(q)
         st.session_state.messages.append({"role": "user", "content": q})
-        with st.chat_message("assistant"):
-            with st.spinner("思考中…"):
-                ans = chain.invoke(q)
-                st.write(ans)
+        with st.spinner("思考中…"):
+            ans = chain.invoke(q)
         st.session_state.messages.append({"role": "assistant", "content": ans})
+        st.rerun()
